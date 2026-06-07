@@ -1,0 +1,12 @@
+---
+- name: start-mysql
+  ansible.builtin.systemd:
+    name: mysqld
+    state: started
+    enabled: yes
+
+- name: restart-mysql
+  ansible.builtin.systemd:
+    name: mysqld
+    state: restarted
+    enabled: yes

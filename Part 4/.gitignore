@@ -1,0 +1,27 @@
+# Vault and sensitive files
+.vault_password
+.vault
+group_vars/mysql_servers/vault.yml
+group_vars/*/vault.yml
+
+# Ansible
+*.retry
+.ansible
+
+# System
+.vagrant/
+*.log
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Secrets
+secrets/
+private_keys/
+/tmp/

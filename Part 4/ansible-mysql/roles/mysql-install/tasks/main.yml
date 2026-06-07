@@ -1,0 +1,74 @@
+---
+- name: Add MySQL repository (Rocky Linux/CentOS)
+  ansible.builtin.yum_repository:
+    name: mysql{{ mysql_version | replace('.', '') }}
+    description: MySQL {{ mysql_version }} Community Server Repository
+    baseurl: https://repo.mysql.com/yum/mysql-{{ mysql_version }}-community/el/{{ ansible_distribution_major_version }}/$basearch/
+    enabled: yes
+    gpgcheck: yes
+    gpgkey: https://repo.mysql.com/RPM-GPG-KEY-mysql-2023
+  when: ansible_os_family == "RedHat"
+
+- name: Install MySQL Server
+  ansible.builtin.yum:
+    name: "mysql-community-server"
+    state: present
+  notify: start-mysql
+
+- name: Create MySQL socket directory
+  ansible.builtin.file:
+    path: "{{ mysql_socket | dirname }}"
+    state: directory
+    owner: "{{ mysql_user }}"
+    group: "{{ mysql_group }}"
+    mode: "0755"
+
+- name: Check if MySQL config exists
+  ansible.builtin.stat:
+    path: /etc/my.cnf
+  register: mysql_config
+
+- name: Deploy MySQL configuration file
+  ansible.builtin.template:
+    src: my.cnf.j2
+    dest: /etc/my.cnf
+    owner: root
+    group: root
+    mode: "0644"
+    backup: yes
+  notify: restart-mysql
+
+- name: Ensure MySQL log directory exists with correct permissions
+  ansible.builtin.file:
+    path: "{{ mysql_log_dir }}"
+    state: directory
+    owner: "{{ mysql_user }}"
+    group: "{{ mysql_group }}"
+    mode: "0777"
+
+- name: Pre-create error.log file with correct permissions
+  ansible.builtin.file:
+    path: "{{ mysql_log_dir }}/error.log"
+    state: touch
+    owner: "{{ mysql_user }}"
+    group: "{{ mysql_group }}"
+    mode: "0666"
+    modification_time: now
+    access_time: now
+
+- name: Set SELinux context for MySQL log directory (if needed)
+  ansible.builtin.shell:
+    cmd: |
+      # Ensure full write permissions for mysql user
+      chown -R "{{ mysql_user }}":"{{ mysql_group }}" "{{ mysql_log_dir }}"
+      chmod -R 0777 "{{ mysql_log_dir }}"
+      # Remove any restrictive umask
+      umask 0000
+  changed_when: false
+
+- name: Start MySQL service
+  ansible.builtin.systemd:
+    name: mysqld
+    state: started
+    enabled: yes
+  notify: start-mysql

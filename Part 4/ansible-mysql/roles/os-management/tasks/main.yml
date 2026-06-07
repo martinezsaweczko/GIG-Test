@@ -1,0 +1,101 @@
+---
+- name: Install Python and PyMySQL for Ansible MySQL modules
+  ansible.builtin.yum:
+    name:
+      - python3
+      - python3-pip
+      - python3-devel
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Install PyMySQL via pip
+  ansible.builtin.pip:
+    name: PyMySQL
+    state: present
+    executable: pip3
+
+# - name: Update system packages
+#   ansible.builtin.yum:
+#     name: "*"
+#     state: latest
+#   when: ansible_os_family == "RedHat"
+
+- name: Install required packages
+  ansible.builtin.yum:
+    name:
+      - kernel-headers
+      - gcc
+      - make
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Create MySQL user
+  ansible.builtin.user:
+    name: "{{ mysql_user }}"
+    shell: /bin/false
+    home: "{{ mysql_data_dir }}"
+    createhome: no
+    state: present
+
+- name: Create MySQL group
+  ansible.builtin.group:
+    name: "{{ mysql_group }}"
+    state: present
+
+- name: Create data directory
+  ansible.builtin.file:
+    path: "{{ mysql_data_dir }}"
+    state: directory
+    owner: "{{ mysql_user }}"
+    group: "{{ mysql_group }}"
+    mode: "0750"
+
+- name: Create log directory
+  ansible.builtin.file:
+    path: "{{ mysql_log_dir }}"
+    state: directory
+    owner: "{{ mysql_user }}"
+    group: "{{ mysql_group }}"
+    mode: "0750"
+
+- name: Configure MySQL user limits - soft
+  ansible.builtin.pam_limits:
+    domain: "{{ mysql_user }}"
+    limit_type: soft
+    limit_item: nofile
+    value: "{{ mysql_open_files_limit }}"
+
+- name: Configure MySQL user limits - hard
+  ansible.builtin.pam_limits:
+    domain: "{{ mysql_user }}"
+    limit_type: hard
+    limit_item: nofile
+    value: "{{ mysql_open_files_limit }}"
+
+- name: Configure MySQL user limits - soft memlock
+  ansible.builtin.pam_limits:
+    domain: "{{ mysql_user }}"
+    limit_type: soft
+    limit_item: memlock
+    value: unlimited
+
+- name: Configure MySQL user limits - hard memlock
+  ansible.builtin.pam_limits:
+    domain: "{{ mysql_user }}"
+    limit_type: hard
+    limit_item: memlock
+    value: unlimited
+
+- name: Configure MySQL user limits - soft nproc
+  ansible.builtin.pam_limits:
+    domain: "{{ mysql_user }}"
+    limit_type: soft
+    limit_item: nproc
+    value: 32000
+
+- name: Configure MySQL user limits - hard nproc
+  ansible.builtin.pam_limits:
+    domain: "{{ mysql_user }}"
+    limit_type: hard
+    limit_item: nproc
+    value: 32000

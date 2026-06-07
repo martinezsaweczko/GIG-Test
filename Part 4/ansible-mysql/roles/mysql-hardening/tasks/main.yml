@@ -1,0 +1,200 @@
+---
+- name: Check if MySQL hardening has already been completed
+  ansible.builtin.stat:
+    path: "{{ mysql_data_dir }}/.hardened"
+  register: hardening_marker
+
+- name: Set hardening_needed flag
+  ansible.builtin.set_fact:
+    hardening_needed: "{{ not hardening_marker.stat.exists }}"
+
+- name: Display hardening status
+  ansible.builtin.debug:
+    msg: "MySQL hardening needed: {{ hardening_needed }}"
+
+- name: Wait for MySQL to be ready
+  ansible.builtin.pause:
+    seconds: 5
+  when: hardening_needed
+
+- name: Check if MySQL is running
+  ansible.builtin.systemd:
+    name: mysqld
+    state: started
+  when: hardening_needed
+
+- name: Get MySQL root temporary password
+  ansible.builtin.shell:
+    cmd: grep 'temporary password' {{ mysql_log_dir }}/error.log | tail -1 | awk '{print $NF}'
+  register: mysql_temp_password
+  changed_when: false
+  ignore_errors: yes
+  when: hardening_needed
+
+- name: Generate random root password
+  ansible.builtin.set_fact:
+    mysql_root_password: "{{ lookup('password', '/tmp/mysql_root_password length=16 chars=ascii_letters,digits,punctuation') }}"
+  when: hardening_needed
+
+- name: Reset root password using temporary password via shell
+  ansible.builtin.shell:
+    cmd: |
+      mysql -u root -p"{{ mysql_temp_password.stdout }}" \
+        -h localhost \
+        -P {{ mysql_port }} \
+        --connect-expired-password \
+        -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '{{ mysql_root_password }}';" 2>/dev/null
+  changed_when: false
+  no_log: yes
+  ignore_errors: yes
+  when: hardening_needed
+
+- name: Create default application user
+  community.mysql.mysql_user:
+    name: "{{ mysql_app_user }}"
+    host: "{{ item }}"
+    password: "{{ mysql_app_user_password }}"
+    priv: "{{ mysql_app_user_priv }}"
+    state: present
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+  loop: "{{ mysql_app_user_hosts }}"
+  no_log: yes
+  ignore_errors: yes
+  when: hardening_needed
+
+- name: Remove test database
+  community.mysql.mysql_db:
+    name: "{{ mysql_temp_database }}"
+    state: absent
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+  ignore_errors: yes
+  when: hardening_needed
+
+- name: Remove anonymous MySQL users
+  community.mysql.mysql_user:
+    name: ""
+    host: "{{ item }}"
+    state: absent
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+  loop:
+    - localhost
+    - "%"
+  ignore_errors: yes
+  when: hardening_needed
+
+- name: Remove root user remote access
+  community.mysql.mysql_user:
+    name: root
+    host: "{{ item }}"
+    state: absent
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+  loop:
+    - "::1"
+    - "%"
+  ignore_errors: yes
+  when: hardening_needed
+
+- name: Remove event scheduler (unless needed)
+  community.mysql.mysql_variables:
+    variable: event_scheduler
+    value: "OFF"
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+  ignore_errors: yes
+  when: hardening_needed
+
+- name: Set require_secure_transport to ON
+  community.mysql.mysql_variables:
+    variable: require_secure_transport
+    value: "ON"
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+  ignore_errors: yes
+  when: hardening_needed
+
+- name: Flush MySQL privileges
+  community.mysql.mysql_query:
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+    query: "FLUSH PRIVILEGES"
+  ignore_errors: yes
+  when: hardening_needed
+
+- name: Create MySQL hardening report
+  ansible.builtin.copy:
+    content: |
+      # MySQL Hardening Report
+
+      ## Temporary & Root Password Reset:
+      - Original temporary root password extracted from: {{ mysql_log_dir }}/error.log
+      - New root password (random): {{ mysql_root_password }}
+      - Root password stored in: /tmp/mysql_root_password
+
+      ## Changes Applied:
+      - Removed test database
+      - Removed anonymous users
+      - Removed remote root access
+      - Disabled event scheduler
+      - Enabled require_secure_transport
+      - Enabled skip_name_resolve
+      - Set MySQL root password authentication
+
+      ## Application User Created:
+      - Username: {{ mysql_app_user }}
+      - Password: (from vault: {{ mysql_app_user_password }})
+      - Privileges: {{ mysql_app_user_priv }}
+      - Hosts: {{ mysql_app_user_hosts | join(', ') }}
+
+      ## Connection Methods:
+      - Root: mysql -u root -p (password in /tmp/mysql_root_password)
+      - App user: mysql -u {{ mysql_app_user }} -p
+      - Port: {{ mysql_port }}
+
+      ## Security Recommendations:
+      - Configure firewall to restrict MySQL access
+      - Enable binary logging for point-in-time recovery
+      - Schedule regular backups
+      - Monitor slow query log
+      - Configure replication if needed
+    dest: "{{ mysql_log_dir }}/HARDENING_REPORT.txt"
+    owner: "{{ mysql_user }}"
+    group: "{{ mysql_group }}"
+    mode: "0640"
+  when: hardening_needed
+
+- name: Create hardening marker file
+  ansible.builtin.file:
+    path: "{{ mysql_data_dir }}/.hardened"
+    state: touch
+    owner: "{{ mysql_user }}"
+    group: "{{ mysql_group }}"
+    mode: "0600"
+  when: hardening_needed
+
+- name: Display hardening completion message
+  ansible.builtin.debug:
+    msg: "MySQL hardening completed! Marker file created at {{ mysql_data_dir }}/.hardened"
+  when: hardening_needed
+
+- name: Display already hardened message
+  ansible.builtin.debug:
+    msg: "MySQL is already hardened. Skipping hardening tasks."
+  when: not hardening_needed

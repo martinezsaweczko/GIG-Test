@@ -1,0 +1,41 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+  # AlmaLinux 9 box (RHEL-based, similar to Rocky Linux)
+  # Widely available and actively maintained
+  config.vm.box = "almalinux/9"
+
+  # VM name
+  config.vm.hostname = "almalinux-9"
+
+  # Network configuration
+  config.vm.network "private_network", type: "dhcp"
+  # Uncomment for static IP:
+  # config.vm.network "private_network", ip: "192.168.33.10"
+
+  # Uncomment for public network (bridged):
+  # config.vm.network "public_network"
+
+  # Provider-specific configuration
+  config.vm.provider "virtualbox" do |vb|
+    # Display the VirtualBox GUI when booting the machine
+    # vb.gui = true
+
+    # Customize the amount of memory and CPU:
+    vb.memory = "2048"
+    vb.cpus = 2
+
+    # VM name in VirtualBox
+    vb.name = "Rocky-Linux-10"
+  end
+
+  # Shared folder (uncomment to enable)
+  # config.vm.synced_folder ".", "/vagrant", type: "virtualbox"
+
+  # Provisioning - uncomment to enable
+  # config.vm.provision "shell", inline: <<-SHELL
+  #   yum update -y
+  #   yum install -y vim git
+  # SHELL
+end

@@ -1,0 +1,5 @@
+---
+- name: restart-mysql-hardening
+  ansible.builtin.systemd:
+    name: mysqld
+    state: restarted

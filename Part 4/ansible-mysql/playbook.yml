@@ -1,0 +1,27 @@
+---
+- name: MySQL 8 Installation and Configuration
+  hosts: all
+  become: yes
+  vars_files:
+    - vars/main.yml
+
+  roles:
+    - role: os-management
+      tags: [os, setup]
+    - role: mysql-install
+      tags: [install, mysql]
+    - role: mysql-hardening
+      tags: [hardening, security]
+
+  post_tasks:
+    - name: Verify MySQL is running
+      ansible.builtin.systemd:
+        name: mysqld
+        state: started
+        enabled: yes
+      tags: [verify, always]
+
+    - name: Display MySQL version
+      ansible.builtin.command: mysql --version
+      changed_when: false
+      tags: [verify, always]

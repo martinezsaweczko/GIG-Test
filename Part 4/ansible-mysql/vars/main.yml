@@ -1,0 +1,49 @@
+---
+# MySQL Configuration Variables
+
+# MySQL Paths
+mysql_user: mysql
+mysql_group: mysql
+mysql_data_dir: /var/lib/mysql
+mysql_log_dir: /var/log/mysql
+mysql_socket: /var/run/mysqld/mysqld.sock
+
+# MySQL Limits (for OS management)
+mysql_open_files_limit: 65536
+mysql_max_connections: 200
+
+# MySQL Default Configuration
+mysql_port: 3306
+mysql_bind_address: "0.0.0.0"
+mysql_max_allowed_packet: "256M"
+mysql_default_storage_engine: "InnoDB"
+mysql_innodb_buffer_pool_size: "1G"
+mysql_innodb_redo_log_capacity: "536M"
+
+# MySQL Binary Logging (MySQL 8 compatible)
+mysql_binlog_expire_logs_seconds: 864000 # 10 days in seconds
+
+# MySQL Server Tuning
+mysql_slow_query_log: "ON"
+mysql_long_query_time: 2
+mysql_log_queries_not_using_indexes: "ON"
+
+# MySQL Version
+mysql_version: "8.0"
+
+# Default Application User
+mysql_app_user: app_user
+mysql_app_user_hosts:
+  - localhost
+  - "%"
+mysql_app_user_password: "{{ vault_mysql_app_password }}"
+mysql_app_user_priv: "*.*:ALL,GRANT"
+
+# Temporary users to remove during hardening
+mysql_temp_database: test
+mysql_users_to_remove:
+  - "'root'@'::1'"
+  - "'root'@'127.0.0.1'"
+  - "''@'localhost'"
+  - "''@'%'"
+  - "'root'@'%'"
