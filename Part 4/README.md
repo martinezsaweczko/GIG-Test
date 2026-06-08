@@ -378,6 +378,12 @@ How to migrate data from legacy table to new partitioned table:
 make migrate_to_partitioned
 ```
 
+The strategy used for migrating data is just divide the number of records I have to migrate by the batch size and then execute the migration in batches with a delay between each batch. Also we have a small delay between batches execution.
+
+If we want to reduce the number of IOPS we can relax the ACID setting of the server.
+
+*Key Improvement: In case of big partitions we can consider other techniques like exchange partition where a full table is swapped with a partition, but for the sake of this test we will just do a simple batch migration.*
+
 output should be similar to:
 
 ```
