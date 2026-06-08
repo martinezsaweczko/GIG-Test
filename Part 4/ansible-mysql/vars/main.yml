@@ -4,8 +4,8 @@
 # MySQL Paths
 mysql_user: mysql
 mysql_group: mysql
-mysql_data_dir: /var/lib/mysql
-mysql_log_dir: /var/log/mysql
+mysql_data_dir: /data/mysql/data
+mysql_log_dir: /data/mysql/log
 mysql_socket: /var/run/mysqld/mysqld.sock
 
 # MySQL Limits (for OS management)

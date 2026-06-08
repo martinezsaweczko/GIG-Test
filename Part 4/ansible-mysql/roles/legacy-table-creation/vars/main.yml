@@ -1,0 +1,5 @@
+---
+# Legacy table creation variables
+legacy_table_name: transaction_logs_flat
+legacy_db_name: GIG_REFACTOR_LAB
+legacy_rows_count: 1000000

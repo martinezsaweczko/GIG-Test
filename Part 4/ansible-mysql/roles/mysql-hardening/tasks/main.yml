@@ -17,6 +17,12 @@
     seconds: 5
   when: hardening_needed
 
+- name: Remove old root password file
+  ansible.builtin.file:
+    path: /tmp/mysql_root_password
+    state: absent
+  when: hardening_needed
+
 - name: Check if MySQL is running
   ansible.builtin.systemd:
     name: mysqld
@@ -32,8 +38,22 @@
   when: hardening_needed
 
 - name: Generate random root password
-  ansible.builtin.set_fact:
-    mysql_root_password: "{{ lookup('password', '/tmp/mysql_root_password length=16 chars=ascii_letters,digits,punctuation') }}"
+  block:
+    - name: Generate password components with policy compliance
+      ansible.builtin.set_fact:
+        pass_lowercase: "{{ lookup('password', '/tmp/pass_lower length=3 chars=ascii_lowercase') }}"
+        pass_uppercase: "{{ lookup('password', '/tmp/pass_upper length=3 chars=ascii_uppercase') }}"
+        pass_numbers: "{{ lookup('password', '/tmp/pass_numbers length=2 chars=digits') }}"
+        pass_special: "{{ lookup('password', '/tmp/pass_special chars=#^-_=+') }}"
+
+    - name: Combine and shuffle password
+      ansible.builtin.set_fact:
+        mysql_root_password: "{{ (pass_lowercase + pass_uppercase + pass_numbers + pass_special) | shuffle | join }}"
+  when: hardening_needed
+
+- name: Display random root password generation confirmation
+  ansible.builtin.debug:
+    msg: "Random root password: {{ mysql_root_password }}"
   when: hardening_needed
 
 - name: Reset root password using temporary password via shell
@@ -43,9 +63,9 @@
         -h localhost \
         -P {{ mysql_port }} \
         --connect-expired-password \
-        -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '{{ mysql_root_password }}';" 2>/dev/null
+        -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '{{ mysql_root_password }}';"
   changed_when: false
-  no_log: yes
+  no_log: no
   ignore_errors: yes
   when: hardening_needed
 
@@ -61,7 +81,7 @@
     login_host: "{{ mysql_bind_address }}"
     login_port: "{{ mysql_port }}"
   loop: "{{ mysql_app_user_hosts }}"
-  no_log: yes
+  no_log: no
   ignore_errors: yes
   when: hardening_needed
 
@@ -136,48 +156,6 @@
     login_port: "{{ mysql_port }}"
     query: "FLUSH PRIVILEGES"
   ignore_errors: yes
-  when: hardening_needed
-
-- name: Create MySQL hardening report
-  ansible.builtin.copy:
-    content: |
-      # MySQL Hardening Report
-
-      ## Temporary & Root Password Reset:
-      - Original temporary root password extracted from: {{ mysql_log_dir }}/error.log
-      - New root password (random): {{ mysql_root_password }}
-      - Root password stored in: /tmp/mysql_root_password
-
-      ## Changes Applied:
-      - Removed test database
-      - Removed anonymous users
-      - Removed remote root access
-      - Disabled event scheduler
-      - Enabled require_secure_transport
-      - Enabled skip_name_resolve
-      - Set MySQL root password authentication
-
-      ## Application User Created:
-      - Username: {{ mysql_app_user }}
-      - Password: (from vault: {{ mysql_app_user_password }})
-      - Privileges: {{ mysql_app_user_priv }}
-      - Hosts: {{ mysql_app_user_hosts | join(', ') }}
-
-      ## Connection Methods:
-      - Root: mysql -u root -p (password in /tmp/mysql_root_password)
-      - App user: mysql -u {{ mysql_app_user }} -p
-      - Port: {{ mysql_port }}
-
-      ## Security Recommendations:
-      - Configure firewall to restrict MySQL access
-      - Enable binary logging for point-in-time recovery
-      - Schedule regular backups
-      - Monitor slow query log
-      - Configure replication if needed
-    dest: "{{ mysql_log_dir }}/HARDENING_REPORT.txt"
-    owner: "{{ mysql_user }}"
-    group: "{{ mysql_group }}"
-    mode: "0640"
   when: hardening_needed
 
 - name: Create hardening marker file

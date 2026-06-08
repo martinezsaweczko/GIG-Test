@@ -23,6 +23,59 @@
     group: "{{ mysql_group }}"
     mode: "0755"
 
+- name: Create base MySQL directory structure
+  ansible.builtin.file:
+    path: "/data/mysql"
+    state: directory
+    owner: "{{ mysql_user }}"
+    group: "{{ mysql_group }}"
+    mode: "0750"
+
+- name: Create MySQL data directory
+  ansible.builtin.file:
+    path: "{{ mysql_data_dir }}"
+    state: directory
+    owner: "{{ mysql_user }}"
+    group: "{{ mysql_group }}"
+    mode: "0750"
+
+- name: Set immediate SELinux context for MySQL data directory
+  ansible.builtin.shell:
+    cmd: chcon -R -u system_u -r object_r -t mysqld_db_t {{ mysql_data_dir }}
+  when: ansible_os_family == "RedHat"
+  ignore_errors: yes
+
+- name: Set immediate SELinux context for MySQL log directory
+  ansible.builtin.shell:
+    cmd: chcon -R -u system_u -r object_r -t mysqld_log_t {{ mysql_log_dir }}
+  when: ansible_os_family == "RedHat"
+  ignore_errors: yes
+
+- name: Install policycoreutils-python-utils for semanage (required for persistent SELinux policies)
+  ansible.builtin.yum:
+    name: policycoreutils-python-utils
+    state: present
+  when: ansible_os_family == "RedHat"
+  ignore_errors: yes
+
+- name: Set persistent SELinux policy for MySQL data directory
+  ansible.builtin.shell:
+    cmd: semanage fcontext -a -t mysqld_db_t "{{ mysql_data_dir }}(/.*)?"
+  when: ansible_os_family == "RedHat"
+  ignore_errors: yes
+
+- name: Set persistent SELinux policy for MySQL log directory
+  ansible.builtin.shell:
+    cmd: semanage fcontext -a -t mysqld_log_t "{{ mysql_log_dir }}(/.*)?"
+  when: ansible_os_family == "RedHat"
+  ignore_errors: yes
+
+- name: Restore SELinux context for MySQL directories
+  ansible.builtin.shell:
+    cmd: restorecon -Rv /data/mysql
+  when: ansible_os_family == "RedHat"
+  ignore_errors: yes
+
 - name: Check if MySQL config exists
   ansible.builtin.stat:
     path: /etc/my.cnf
@@ -44,7 +97,7 @@
     state: directory
     owner: "{{ mysql_user }}"
     group: "{{ mysql_group }}"
-    mode: "0777"
+    mode: "0750"
 
 - name: Pre-create error.log file with correct permissions
   ansible.builtin.file:
@@ -52,19 +105,9 @@
     state: touch
     owner: "{{ mysql_user }}"
     group: "{{ mysql_group }}"
-    mode: "0666"
+    mode: "0640"
     modification_time: now
     access_time: now
-
-- name: Set SELinux context for MySQL log directory (if needed)
-  ansible.builtin.shell:
-    cmd: |
-      # Ensure full write permissions for mysql user
-      chown -R "{{ mysql_user }}":"{{ mysql_group }}" "{{ mysql_log_dir }}"
-      chmod -R 0777 "{{ mysql_log_dir }}"
-      # Remove any restrictive umask
-      umask 0000
-  changed_when: false
 
 - name: Start MySQL service
   ansible.builtin.systemd:

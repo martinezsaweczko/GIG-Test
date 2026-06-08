@@ -1,0 +1,224 @@
+---
+- name: Check if source table exists
+  community.mysql.mysql_query:
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+    login_db: "{{ migration_db }}"
+    query: |
+      SELECT TABLE_NAME
+      FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = '{{ migration_db }}'
+      AND TABLE_NAME = '{{ source_table }}'
+  register: source_table_check
+  ignore_errors: yes
+
+- name: Exit if source table does not exist
+  ansible.builtin.meta: end_play
+  when: source_table_check.query_result | length == 0
+
+- name: Display source table found
+  ansible.builtin.debug:
+    msg: "✓ Source table {{ source_table }} found. Proceeding with migration."
+
+- name: Display migration parameters
+  ansible.builtin.debug:
+    msg: |
+      Migration Configuration:
+      - Source: {{ source_table }}
+      - Target: {{ target_table }}
+      - Database: {{ migration_db }}
+      - Batch Size: {{ batch_size }} rows
+      - Delay Between Batches: {{ batch_delay_seconds }} seconds
+      - Migration Window: Last {{ migration_window_months }} months
+
+- name: Create partitioned transaction_logs_modern table
+  community.mysql.mysql_query:
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+    login_db: "{{ migration_db }}"
+    query: |
+      CREATE TABLE IF NOT EXISTS {{ target_table }} (
+        id BIGINT AUTO_INCREMENT,
+        created_at TIMESTAMP NOT NULL,
+        brand_id INT NOT NULL,
+        payload JSON NOT NULL,
+        PRIMARY KEY (id, created_at),
+        INDEX idx_created_at (created_at),
+        INDEX idx_brand_id (brand_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      PARTITION BY RANGE (UNIX_TIMESTAMP(created_at)) (
+        PARTITION p202412 VALUES LESS THAN (UNIX_TIMESTAMP('2026-01-01')),
+        PARTITION p202501 VALUES LESS THAN (UNIX_TIMESTAMP('2026-02-01')),
+        PARTITION p202502 VALUES LESS THAN (UNIX_TIMESTAMP('2026-03-01')),
+        PARTITION p202503 VALUES LESS THAN (UNIX_TIMESTAMP('2026-04-01')),
+        PARTITION p202504 VALUES LESS THAN (UNIX_TIMESTAMP('2026-05-01')),
+        PARTITION p202505 VALUES LESS THAN (UNIX_TIMESTAMP('2026-06-01')),
+        PARTITION pmax VALUES LESS THAN MAXVALUE
+      )
+  ignore_errors: yes
+
+- name: Create index on legacy table for migration performance
+  community.mysql.mysql_query:
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+    login_db: "{{ migration_db }}"
+    query: |
+      CREATE INDEX idx_created_at ON {{ source_table }} (created_at);
+  register: create_index_result
+  ignore_errors: yes
+
+- name: Get total rows in last 3 months from flat table
+  community.mysql.mysql_query:
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+    login_db: "{{ migration_db }}"
+    query: |
+      SELECT COUNT(*) as row_count
+      FROM {{ source_table }}
+      WHERE created_at >= DATE_SUB(NOW(), INTERVAL {{ migration_window_months }} MONTH)
+  register: source_row_count_result
+
+- name: Set source row count
+  ansible.builtin.set_fact:
+    total_rows_to_migrate: "{{ source_row_count_result.query_result[0][0].row_count | int }}"
+
+- name: Display rows to migrate
+  ansible.builtin.debug:
+    msg: "Total rows to migrate from last {{ migration_window_months }} months: {{ total_rows_to_migrate }}"
+
+- name: Calculate number of batches
+  ansible.builtin.set_fact:
+    total_batches: "{{ ((total_rows_to_migrate | int) / (batch_size | int) + 0.99) | int }}"
+
+- name: Display batch information
+  ansible.builtin.debug:
+    msg: "Will migrate {{ total_rows_to_migrate }} rows in {{ total_batches }} batches of {{ batch_size }} rows"
+
+- name: Migrate data in batches with throttling
+  ansible.builtin.shell:
+    cmd: |
+      BATCH_SIZE={{ batch_size }}
+      DELAY_SECONDS={{ batch_delay_seconds }}
+      TOTAL_ROWS={{ total_rows_to_migrate }}
+      BATCH_COUNT=0
+      OFFSET=0
+      TOTAL_INSERTED=0
+
+      echo "Starting batch migration: $TOTAL_ROWS rows in batches of $BATCH_SIZE..."
+
+      while [ $OFFSET -lt $TOTAL_ROWS ]; do
+        BATCH_COUNT=$((BATCH_COUNT + 1))
+        REMAINING=$((TOTAL_ROWS - OFFSET))
+
+        if [ $REMAINING -lt $BATCH_SIZE ]; then
+          ROWS_IN_BATCH=$REMAINING
+        else
+          ROWS_IN_BATCH=$BATCH_SIZE
+        fi
+
+        echo "Batch $BATCH_COUNT: Inserting $ROWS_IN_BATCH rows (offset: $OFFSET, remaining: $REMAINING, total so far: $TOTAL_INSERTED)"
+
+        mysql -u {{ mysql_app_user }} -p{{ mysql_app_user_password }} \
+          -h {{ mysql_bind_address }} \
+          -P {{ mysql_port }} \
+          {{ migration_db }} << EOF
+        INSERT INTO {{ target_table }} (id, created_at, brand_id, payload)
+        SELECT id, created_at, brand_id, payload
+        FROM {{ source_table }}
+        WHERE created_at >= DATE_SUB(NOW(), INTERVAL {{ migration_window_months }} MONTH)
+        ORDER BY created_at DESC, id ASC
+        LIMIT $ROWS_IN_BATCH OFFSET $OFFSET;
+      EOF
+
+        BATCH_RESULT=$?
+        if [ $BATCH_RESULT -eq 0 ]; then
+          TOTAL_INSERTED=$((TOTAL_INSERTED + ROWS_IN_BATCH))
+          echo "✓ Batch $BATCH_COUNT inserted successfully. Total inserted so far: $TOTAL_INSERTED"
+        else
+          echo "✗ Batch $BATCH_COUNT FAILED with exit code $BATCH_RESULT"
+        fi
+
+        OFFSET=$((OFFSET + ROWS_IN_BATCH))
+
+        if [ $OFFSET -lt $TOTAL_ROWS ]; then
+          echo "Throttling for $DELAY_SECONDS seconds before next batch..."
+          sleep $DELAY_SECONDS
+        fi
+      done
+      echo "=========================================="
+      echo "Migration loop complete!"
+      echo "Total batches: $BATCH_COUNT"
+      echo "Final offset: $OFFSET"
+      echo "Total inserted: $TOTAL_INSERTED"
+      echo "Expected: $TOTAL_ROWS"
+      echo "=========================================="
+  async: 18000
+  poll: 30
+  ignore_errors: yes
+
+- name: Get row count in target table
+  community.mysql.mysql_query:
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+    login_db: "{{ migration_db }}"
+    query: "SELECT COUNT(*) as row_count FROM {{ target_table }}"
+  register: target_row_count_result
+
+- name: Set target row count
+  ansible.builtin.set_fact:
+    migrated_row_count: "{{ target_row_count_result.query_result[0][0].row_count | int }}"
+
+- name: Display migration verification
+  ansible.builtin.debug:
+    msg: |
+      Migration Verification:
+      - Rows to migrate: {{ total_rows_to_migrate }}
+      - Rows migrated: {{ migrated_row_count }}
+      - Status: {% if migrated_row_count == total_rows_to_migrate %}SUCCESS{% else %}INCOMPLETE{% endif %}
+
+- name: Verify migration success
+  ansible.builtin.assert:
+    that:
+      - migrated_row_count | int == total_rows_to_migrate | int
+    fail_msg: "Migration incomplete! Expected {{ total_rows_to_migrate }} rows but only {{ migrated_row_count }} were migrated."
+    success_msg: "Migration successful! All {{ migrated_row_count }} rows have been migrated."
+
+- name: Display archive warning
+  ansible.builtin.debug:
+    msg: |
+      ⚠️  WARNING: About to drop legacy table {{ source_table }}
+      This action is irreversible!
+      Proceeding with archival in 10 seconds...
+
+- name: Wait before dropping table
+  ansible.builtin.pause:
+    seconds: 10
+
+- name: Drop legacy flat table
+  community.mysql.mysql_query:
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+    login_db: "{{ migration_db }}"
+    query: "DROP TABLE IF EXISTS {{ source_table }}"
+  ignore_errors: yes
+
+- name: Display final status
+  ansible.builtin.debug:
+    msg: |
+      ✓ Migration and Archival Complete!
+      - Partitioned table {{ target_table }} created successfully
+      - Migrated {{ migrated_row_count }} rows from the last {{ migration_window_months }} months
+      - Legacy table {{ source_table }} has been archived (dropped)
+      - System is now running on the modern partitioned architecture

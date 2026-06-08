@@ -1,0 +1,11 @@
+---
+# On-demand playbook for migration from flat to partitioned architecture
+- name: Migration and Archiving Simulation
+  hosts: all
+  become: yes
+  vars_files:
+    - group_vars/mysql_servers/vault.yml
+    - vars/main.yml
+
+  roles:
+    - migration-and-archiving

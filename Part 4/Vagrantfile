@@ -27,7 +27,7 @@ Vagrant.configure("2") do |config|
     vb.cpus = 2
 
     # VM name in VirtualBox
-    vb.name = "Rocky-Linux-10"
+    vb.name = "AlmaLinux 9 VM"
   end
 
   # Shared folder (uncomment to enable)

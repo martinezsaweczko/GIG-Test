@@ -1,0 +1,8 @@
+---
+# Migration and Archiving variables
+source_table: transaction_logs_flat
+target_table: transaction_logs_modern
+migration_db: GIG_REFACTOR_LAB
+batch_size: 25000
+batch_delay_seconds: 5
+migration_window_months: 3

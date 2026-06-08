@@ -1,0 +1,11 @@
+---
+# On-demand playbook for creating and populating the legacy transaction_logs_flat table
+- name: Populate Legacy Transaction Logs Table
+  hosts: all
+  become: yes
+  vars_files:
+    - group_vars/mysql_servers/vault.yml
+    - vars/main.yml
+
+  roles:
+    - legacy-table-creation
