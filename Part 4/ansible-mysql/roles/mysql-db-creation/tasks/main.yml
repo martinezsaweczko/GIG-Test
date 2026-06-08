@@ -1,0 +1,37 @@
+---
+- name: Create MySQL database
+  community.mysql.mysql_db:
+    name: "{{ mysql_database_name }}"
+    state: present
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+  register: db_creation_result
+  tags: [database, create]
+
+- name: Display database creation status
+  ansible.builtin.debug:
+    msg: "Database '{{ mysql_database_name }}' created successfully"
+  when: db_creation_result.changed
+  tags: [database, create]
+
+- name: Display database already exists
+  ansible.builtin.debug:
+    msg: "Database '{{ mysql_database_name }}' already exists"
+  when: not db_creation_result.changed
+  tags: [database, create]
+
+- name: Grant app user privileges on database
+  community.mysql.mysql_user:
+    name: "{{ mysql_app_user }}"
+    password: "{{ mysql_app_user_password }}"
+    priv: "{{ mysql_database_name }}.*:ALL"
+    append_privs: yes
+    host: "{{ item }}"
+    login_user: "{{ mysql_app_user }}"
+    login_password: "{{ mysql_app_user_password }}"
+    login_host: "{{ mysql_bind_address }}"
+    login_port: "{{ mysql_port }}"
+  loop: "{{ mysql_app_user_hosts }}"
+  tags: [database, privileges]

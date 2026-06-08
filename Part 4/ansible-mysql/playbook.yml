@@ -12,6 +12,8 @@
       tags: [install, mysql]
     - role: mysql-hardening
       tags: [hardening, security]
+    - role: mysql-db-creation
+      tags: [database, create]
 
   post_tasks:
     - name: Verify MySQL is running

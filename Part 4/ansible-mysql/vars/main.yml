@@ -39,6 +39,9 @@ mysql_app_user_hosts:
 mysql_app_user_password: "{{ vault_mysql_app_password }}"
 mysql_app_user_priv: "*.*:ALL,GRANT"
 
+# Default Database Configuration
+mysql_database_name: "GIG_REFACTOR_LAB"
+
 # Temporary users to remove during hardening
 mysql_temp_database: test
 mysql_users_to_remove:
