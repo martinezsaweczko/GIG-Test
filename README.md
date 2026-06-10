@@ -13,3 +13,6 @@
 
 # Part 4
 [Go to Part 4](./Part%204/)
+
+There is a new branch with of task C of Part 4 (https://github.com/martinezsaweczko/GIG-Test/tree/Improvement_Part4/Part%204).
+I didnt wat to modify the main branch as I already share to be reviewed and I didn't feel fair.
