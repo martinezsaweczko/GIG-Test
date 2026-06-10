@@ -69,7 +69,7 @@
     login_port: "{{ mysql_port }}"
     login_db: "{{ migration_db }}"
     query: |
-      CREATE INDEX idx_created_at ON {{ source_table }} (created_at);
+      CREATE INDEX idx_created_at ON {{ source_table }} (created_at asc, id asc);
   register: create_index_result
   ignore_errors: yes
 
@@ -102,63 +102,66 @@
   ansible.builtin.debug:
     msg: "Will migrate {{ total_rows_to_migrate }} rows in {{ total_batches }} batches of {{ batch_size }} rows"
 
-- name: Migrate data in batches with throttling
+- name: Migrate data in batches with throttling (keyset pagination)
   ansible.builtin.shell:
     cmd: |
       BATCH_SIZE={{ batch_size }}
       DELAY_SECONDS={{ batch_delay_seconds }}
-      TOTAL_ROWS={{ total_rows_to_migrate }}
       BATCH_COUNT=0
-      OFFSET=0
+      LAST_ID=0
       TOTAL_INSERTED=0
+      FINISHED=0
 
-      echo "Starting batch migration: $TOTAL_ROWS rows in batches of $BATCH_SIZE..."
+      echo "Starting batch migration using keyset pagination..."
 
-      while [ $OFFSET -lt $TOTAL_ROWS ]; do
+      while [ $FINISHED -eq 0 ]; do
         BATCH_COUNT=$((BATCH_COUNT + 1))
-        REMAINING=$((TOTAL_ROWS - OFFSET))
 
-        if [ $REMAINING -lt $BATCH_SIZE ]; then
-          ROWS_IN_BATCH=$REMAINING
-        else
-          ROWS_IN_BATCH=$BATCH_SIZE
-        fi
+        echo "Batch $BATCH_COUNT: Starting from id=$LAST_ID"
 
-        echo "Batch $BATCH_COUNT: Inserting $ROWS_IN_BATCH rows (offset: $OFFSET, remaining: $REMAINING, total so far: $TOTAL_INSERTED)"
-
-        mysql -u {{ mysql_app_user }} -p{{ mysql_app_user_password }} \
+        # Insert batch and get ROW_COUNT() in single operation
+        ROW_COUNT=$(mysql -sN -u {{ mysql_app_user }} -p{{ mysql_app_user_password }} \
           -h {{ mysql_bind_address }} \
           -P {{ mysql_port }} \
           {{ migration_db }} << EOF
         INSERT INTO {{ target_table }} (id, created_at, brand_id, payload)
         SELECT id, created_at, brand_id, payload
         FROM {{ source_table }}
-        WHERE created_at >= DATE_SUB(NOW(), INTERVAL {{ migration_window_months }} MONTH)
-        ORDER BY created_at DESC, id ASC
-        LIMIT $ROWS_IN_BATCH OFFSET $OFFSET;
+        WHERE id > $LAST_ID
+        AND created_at >= DATE_SUB(NOW(), INTERVAL {{ migration_window_months }} MONTH)
+        ORDER BY id ASC
+        LIMIT $BATCH_SIZE;
+        SELECT ROW_COUNT();
       EOF
+      )
 
-        BATCH_RESULT=$?
-        if [ $BATCH_RESULT -eq 0 ]; then
-          TOTAL_INSERTED=$((TOTAL_INSERTED + ROWS_IN_BATCH))
-          echo "✓ Batch $BATCH_COUNT inserted successfully. Total inserted so far: $TOTAL_INSERTED"
+        TOTAL_INSERTED=$((TOTAL_INSERTED + ROW_COUNT))
+
+        # Get the max id from the batch to use as the cursor for the next batch
+        LAST_ID=$(mysql -sN -u {{ mysql_app_user }} -p{{ mysql_app_user_password }} \
+          -h {{ mysql_bind_address }} \
+          -P {{ mysql_port }} \
+          {{ migration_db }} << SQLEOF
+        SELECT MAX(id) FROM {{ target_table }}
+        WHERE id > $LAST_ID
+      SQLEOF
+      )
+
+        echo "Batch $BATCH_COUNT: Inserted $ROW_COUNT rows, total inserted: $TOTAL_INSERTED"
+
+        if [ $ROW_COUNT -lt $BATCH_SIZE ]; then
+          FINISHED=1
+          echo "Batch $BATCH_COUNT: Last batch processed with less than $BATCH_SIZE rows. Migration complete."
         else
-          echo "✗ Batch $BATCH_COUNT FAILED with exit code $BATCH_RESULT"
-        fi
-
-        OFFSET=$((OFFSET + ROWS_IN_BATCH))
-
-        if [ $OFFSET -lt $TOTAL_ROWS ]; then
-          echo "Throttling for $DELAY_SECONDS seconds before next batch..."
+          echo "Batch $BATCH_COUNT: Sleeping for $DELAY_SECONDS seconds before next batch..."
           sleep $DELAY_SECONDS
         fi
       done
+
       echo "=========================================="
       echo "Migration loop complete!"
       echo "Total batches: $BATCH_COUNT"
-      echo "Final offset: $OFFSET"
       echo "Total inserted: $TOTAL_INSERTED"
-      echo "Expected: $TOTAL_ROWS"
       echo "=========================================="
   async: 18000
   poll: 30

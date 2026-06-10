@@ -382,7 +382,8 @@ The strategy used for migrating data is just divide the number of records I have
 
 If we want to reduce the number of IOPS we can relax the ACID setting of the server.
 
-*Key Improvement: In case of big partitions we can consider other techniques like exchange partition where a full table is swapped with a partition, but for the sake of this test we will just do a simple batch migration.*
+*IMPROVEMENT POINT: With the first option and the OFFSET, RDBMS have to do the same query again and again and each time it has to skip the number of records defined by the OFFSET, so as the number of batches increases. With this new version, we keep track of the last ID migraed and we use it on the next iteration to migrate the next batch, so we avoid the performance degradation caused by the OFFSET.*
+
 
 output should be similar to:
 
